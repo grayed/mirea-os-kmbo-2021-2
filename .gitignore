@@ -1,3 +1,9 @@
+# Local files
+par/avrg
+par/avrg-mt
+par/avrg-mt-chan
+par/foo
+
 # Prerequisites
 *.d
 
