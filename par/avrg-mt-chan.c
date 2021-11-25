@@ -104,6 +104,10 @@ main(int argc, char **argv) {
 		char buf[sizeof(int)];
 	} u[10];
 	size_t sent[10];
+	int readbuf[10][1024];		// буфер для отправки данных потоку
+	size_t readbuf_filled[10] = { 0 };	// насколько заполнен буфер потока
+	size_t readbuf_read[10] = { 0 };	// насколько прочитан буфер потока
+	size_t nbuffers_fillable = 10;
 
 	if (argc <= 1)
 		usage("source missing");
@@ -168,9 +172,31 @@ main(int argc, char **argv) {
 				// не отправилось полностью предыдущее.
 				int n = atoi(line);
 				int digit = n % 10;
-				pfd[digit].events |= POLLOUT;
-				u[digit].n = n;
+				readbuf[digit][readbuf_filled[digit]++] = n;
 			}
+		}
+
+		// getline -> atoi -> readbuf[digit]
+		// readbuf[digit] -> отправка потоку
+
+		nbuffers_fillable = 0;
+		for (i = 0; i < 10; i++) {
+			if (readbuf_read[i] < readbuf_filled[i]) {
+				int n = readbuf[i][readbuf_read[i]];
+				if ((pfd[i].events & POLLOUT) == 0) {
+					pfd[i].events |= POLLOUT;
+					u[i].n = n;
+					readbuf_read[i]++;
+				}
+			}
+
+			memmove(&readbuf[i][0], &readbuf[i][readbuf_read[i]],
+			    (readbuf_filled[i] - readbuf_read[i]) * sizeof(readbuf[0]));
+			readbuf_filled[i] -= readbuf_read[i];
+			readbuf_read[i] = 0;
+
+			if (readbuf_filled[i] < sizeof(readbuf[i]) / sizeof(readbuf[i][0]))
+				nbuffers_fillable++;
 		}
 	}
 
