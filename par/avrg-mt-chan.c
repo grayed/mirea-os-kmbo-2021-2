@@ -144,9 +144,9 @@ main(int argc, char **argv) {
 				if (nwritten > 0) {
 					readbuf_sent[i] += nwritten;
 					if (readbuf_sent[i] >= sizeof(int)) {
-// readbuf_sent[i] = 13, sizeof(int) = 4 -> movesz = 12
+// readbuf_ready[i] = 32, readbuf_sent[i] = 13, sizeof(int) = 4 -> movesz = 20
 						size_t movesz =
-    (readbuf_sent[i] / sizeof(int) + 1) * sizeof(int) - sizeof(int);
+    ((readbuf_ready[i] - readbuf_sent[i]) / sizeof(int) + 1) * sizeof(int);
 						memmove(readbuf[i].bytes, readbuf[i].bytes + readbuf_sent[i],
 						    movesz);
 						readbuf_sent[i] -= movesz;
