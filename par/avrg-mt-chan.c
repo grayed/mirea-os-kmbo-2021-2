@@ -11,7 +11,6 @@
 #include <string.h>
 #include <unistd.h>
 
-int *nums;
 size_t cnt, allocated;
 
 struct calc_avg_args {
@@ -100,14 +99,15 @@ main(int argc, char **argv) {
 	int ec;
 	struct pollfd pfd[11];
 	union {
-		int n;
-		char buf[sizeof(int)];
-	} u[10];
-	size_t sent[10];
-	int readbuf[10][1024];		// буфер для отправки данных потоку
-	size_t readbuf_filled[10] = { 0 };	// насколько заполнен буфер потока
-	size_t readbuf_read[10] = { 0 };	// насколько прочитан буфер потока
+		int nums[1024];
+		char bytes[1024 * sizeof(int)];
+	} readbuf[10];
+	size_t readbuf_ready[10] = { 0 };	// насколько заполнен буфер потока, байты
+	size_t readbuf_sent[10] = { 0 };	// сколько отправлено в буфер потока, байты
 	size_t nbuffers_fillable = 10;
+
+	// getline() -> atoi() -> readbuf[digit], выставляем POLLOUT
+	// readbuf[digit] -> отправка потоку, сбрасываем POLLOUT если всё отправили
 
 	if (argc <= 1)
 		usage("source missing");
@@ -115,7 +115,6 @@ main(int argc, char **argv) {
 		err(1, "could not open source");
 
 	memset(pfd, 0, sizeof(pfd));
-	memset(sent, 0, sizeof(sent));
 	for (i = 0; i < 10; i++) {
 		if (socketpair(AF_UNIX, SOCK_STREAM, 0, args[i].sock) == -1)
 			err(1, "socketpair");
@@ -135,12 +134,24 @@ main(int argc, char **argv) {
 		poll(pfd, sizeof(pfd)/sizeof(pfd[0]), -1);
 		for (i = 0; i < 10; i++) {
 			if ((pfd[i].revents & POLLOUT) == POLLOUT) {
-				nwritten = write(pfd[i].fd, u[i].buf + sent[i], sizeof(int)-sent[i]);
+
+// Структура readbuf:
+// 0                     readbuf_sent        readbuf_ready
+// было-отправлено-ранее | готово-к-отправке | незаполненная-часть-буфера
+
+				nwritten = write(pfd[i].fd, readbuf[i].bytes + readbuf_sent[i],
+				    readbuf_ready[i] - readbuf_sent[i]);
 				if (nwritten > 0) {
-					sent[i] += nwritten;
-					if (sent[i] == sizeof(int)) {
-						sent[i] = 0;
-						pfd[i].events = POLLIN;
+					readbuf_sent[i] += nwritten;
+					if (readbuf_sent[i] >= sizeof(int)) {
+// readbuf_sent[i] = 13, sizeof(int) = 4 -> movesz = 12
+						size_t movesz =
+    (readbuf_sent[i] / sizeof(int) + 1) * sizeof(int) - sizeof(int);
+						memmove(readbuf[i].bytes, readbuf[i].bytes + readbuf_sent[i],
+						    movesz);
+						readbuf_sent[i] -= movesz;
+						if (readbuf_sent[i] == 0)
+							pfd[i].events &= ~POLLOUT;
 					}
 				} else if (errno != EAGAIN) {
 					err(1, "write");
@@ -158,47 +169,37 @@ main(int argc, char **argv) {
 		}
 
 		if ((pfd[10].events & POLLIN) == POLLIN) {
-			linelen = getline(&line, &linesize, fp);
-			if (linelen == -1) {
-				if (!ferror(fp))
-					break;
-				else if (errno != EAGAIN) {
-					warn("getline");
-					break;
+			for (;;) {
+				linelen = getline(&line, &linesize, fp);
+				if (linelen == -1) {
+					if (!ferror(fp))
+						goto end;
+					else if (errno != EAGAIN) {
+						warn("getline");
+						goto end;
+					}
+				} else {
+					int n = atoi(line);
+					int digit = n % 10;
+					readbuf[digit].nums[readbuf_ready[digit] / sizeof(int)] = n;
+					readbuf_ready[digit] += sizeof(int);
+					pfd[digit].events |= POLLOUT;
+					if (readbuf_ready[digit] == sizeof(readbuf[digit].bytes))
+						break;
 				}
-			} else {
-				// TODO 1
-				// Предупредить ситуацию с отправкой в сокет числа, когда в него ещё
-				// не отправилось полностью предыдущее.
-				int n = atoi(line);
-				int digit = n % 10;
-				readbuf[digit][readbuf_filled[digit]++] = n;
 			}
 		}
 
-		// getline -> atoi -> readbuf[digit]
-		// readbuf[digit] -> отправка потоку
-
-		nbuffers_fillable = 0;
-		for (i = 0; i < 10; i++) {
-			if (readbuf_read[i] < readbuf_filled[i]) {
-				int n = readbuf[i][readbuf_read[i]];
-				if ((pfd[i].events & POLLOUT) == 0) {
-					pfd[i].events |= POLLOUT;
-					u[i].n = n;
-					readbuf_read[i]++;
-				}
+		// Проверяем, есть ли место во всех буферах для отправки данных потокам
+		// хотя бы на один int
+		pfd[10].events |= POLLIN;
+		for (i = 0; i < 10; i++)
+			if (readbuf_ready[i] > sizeof(readbuf[i].bytes) - sizeof(int)) {
+				pfd[10].events &= ~POLLIN;
+				break;
 			}
-
-			memmove(&readbuf[i][0], &readbuf[i][readbuf_read[i]],
-			    (readbuf_filled[i] - readbuf_read[i]) * sizeof(readbuf[0]));
-			readbuf_filled[i] -= readbuf_read[i];
-			readbuf_read[i] = 0;
-
-			if (readbuf_filled[i] < sizeof(readbuf[i]) / sizeof(readbuf[i][0]))
-				nbuffers_fillable++;
-		}
 	}
+end:
 
 	free(line);
 
