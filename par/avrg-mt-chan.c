@@ -144,13 +144,21 @@ main(int argc, char **argv) {
 				if (nwritten > 0) {
 					readbuf_sent[i] += nwritten;
 					if (readbuf_sent[i] >= sizeof(int)) {
-// readbuf_ready[i] = 32, readbuf_sent[i] = 13, sizeof(int) = 4 -> movesz = 20
+// readbuf_ready[i] = 32, readbuf_sent[i] = 15, sizeof(int) = 4 -> movesz = 20, skip_bytes = 12
+// readbuf_ready[i] = 32, readbuf_sent[i] = 13, sizeof(int) = 4 -> movesz = 20, skip_bytes = 12
+// readbuf_ready[i] = 32, readbuf_sent[i] = 12, sizeof(int) = 4 -> movesz = 20, skip_bytes = 12
 						size_t movesz =
-    ((readbuf_ready[i] - readbuf_sent[i]) / sizeof(int) + 1) * sizeof(int);
-						memmove(readbuf[i].bytes, readbuf[i].bytes + readbuf_sent[i],
+    (readbuf_ready[i] - readbuf_sent[i] + (sizeof(int)-1)) / sizeof(int) * sizeof(int);
+
+size_t skip_bytes = readbuf_sent[i] / sizeof(int) * sizeof(int);
+
+//fprintf(stderr, "memmove[%zu]: sent=%zu ready=%zu movesz=%zu\n", i, readbuf_sent[i], readbuf_ready[i], movesz);
+						memmove(readbuf[i].bytes + readbuf_sent[i] % sizeof(int),
+						    readbuf[i].bytes + readbuf_sent[i],
 						    movesz);
-						readbuf_sent[i] -= movesz;
-						if (readbuf_sent[i] == 0)
+						readbuf_sent[i] -= skip_bytes;
+						readbuf_ready[i] -= skip_bytes;
+						if (readbuf_ready[i] == 0)
 							pfd[i].events &= ~POLLOUT;
 					}
 				} else if (errno != EAGAIN) {
