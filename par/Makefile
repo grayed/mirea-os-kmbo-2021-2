@@ -1,4 +1,5 @@
 PROGS =			avrg avrg-mt avrg-mt-chan
+CFLAGS +=		-O0 -g
 CFLAGS-mt =		-pthread
 CFLAGS-mt-chan =	-pthread
 
